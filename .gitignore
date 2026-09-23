@@ -1,0 +1,24 @@
+# Python / FastAPI
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+env/
+.env
+
+# Banco de Dados Local (SQLite)
+*.db
+*.sqlite
+*.sqlite3
+
+# Node / React
+node_modules/
+dist/
+build/
+.vite/
+
+# Sistema Operacional / IDEs
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
