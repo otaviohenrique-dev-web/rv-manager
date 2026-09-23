@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Container, Row, Col, Card, Table, Badge, Spinner, Alert, Button, Form, InputGroup, Nav, Toast, ToastContainer, Modal, OverlayTrigger, Tooltip as BsTooltip } from 'react-bootstrap';
 import { ResponsiveContainer, LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from 'recharts';
-import { FaBoxes, FaChartBar, FaHeartBroken, FaPlusCircle, FaShoppingCart, FaEye, FaEyeSlash, FaSearch, FaFilter, FaEdit, FaTrashAlt, FaExclamationTriangle, FaInfoCircle, FaClipboardList } from 'react-icons/fa';
+import { FaBoxes, FaChartBar, FaHeartBroken, FaPlusCircle, FaShoppingCart, FaEye, FaEyeSlash, FaSearch, FaFilter, FaEdit, FaTrashAlt, FaExclamationTriangle, FaInfoCircle, FaClipboardList, FaWallet, FaUndo } from 'react-icons/fa';
 import { useNavigate, useLocation } from 'react-router-dom';
 import api from '../services/api';
 
@@ -19,6 +19,10 @@ export default function Dashboard() {
   const [faturamentoVisivel, setFaturamentoVisivel] = useState(true);
   const [termoBusca, setTermoBusca] = useState('');
   const [categoriaAtiva, setCategoriaAtiva] = useState('TODOS');
+
+  // --- Estados do Filtro de Período ---
+  const [dataInicio, setDataInicio] = useState('');
+  const [dataFim, setDataFim] = useState('');
 
   const [showToast, setShowToast] = useState(false);
   const [toastMsg, setToastMsg] = useState('');
@@ -53,11 +57,18 @@ export default function Dashboard() {
     }
   }, [location]);
 
-  async function buscarDadosDoBack() {
+  // Função refatorada para aceitar filtros de data
+  async function buscarDadosDoBack(dtInicio = dataInicio, dtFim = dataFim) {
     try {
       setLoading(true);
+      
+      // Monta os parâmetros para envio
+      const params = {};
+      if (dtInicio) params.data_inicio = dtInicio;
+      if (dtFim) params.data_fim = dtFim;
+
       const [respostaGraficos, respostaTabela] = await Promise.all([
-        api.get('/api/v1/dashboard/cards-graficos'),
+        api.get('/api/v1/dashboard/cards-graficos', { params }),
         api.get('/api/v1/dashboard/tabela-precos')
       ]);
 
@@ -72,9 +83,16 @@ export default function Dashboard() {
     }
   }
 
+  // Busca inicial sem parâmetros
   useEffect(() => {
-    buscarDadosDoBack();
+    buscarDadosDoBack('', '');
   }, []);
+
+  const handleResetFiltro = () => {
+    setDataInicio('');
+    setDataFim('');
+    buscarDadosDoBack('', ''); // Dispara busca imediata sem filtros
+  };
 
   const categoriasDisponiveis = useMemo(() => {
     const categorias = new Set(['TODOS']);
@@ -263,77 +281,112 @@ export default function Dashboard() {
   ];
 
   const faturamentoLiquido = kpis.faturamento_total || 0;
-  const valorInvestido = kpis.valor_investido || 0;
-  const faturamentoBruto = kpis.faturamento_bruto || (faturamentoLiquido * 1.12);
+  const custoEstoqueAtual = kpis.custo_estoque_atual || 0;
+  const capitalTotalInvestido = kpis.capital_total_investido || 0;
+  
+  // OS: Cálculo inteligente de Margem (ROI)
+  const margemROI = capitalTotalInvestido > 0
+    ? (((faturamentoLiquido - capitalTotalInvestido) / capitalTotalInvestido) * 100)
+    : 0;
+
+  // OS: Renderização Condicional de Cor do Badge para evitar pânico visual no cliente
+  const getRoiBadgeClass = () => {
+    if (margemROI < 0) return 'bg-warning-subtle text-dark border-warning'; // Atenção Suave
+    if (margemROI > 0) return 'bg-success-subtle text-success border-success-subtle'; // Lucro
+    return 'bg-secondary-subtle text-secondary border-secondary-subtle'; // Neutro/Ponto de Equilíbrio
+  };
 
   return (
     <div style={{ backgroundColor: '#F4F5F7', minHeight: '100vh', paddingBottom: '2rem' }}>
-      <div style={{ backgroundColor: '#0B2545', color: '#FFF', padding: '1.2rem 0' }} className="shadow-sm mb-4">
-        <Container fluid className="px-4 d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3">
-          <div>
-            <h4 className="mb-1 fw-bold tracking-wider">PAINEL DE CONTROLE DE PRODUÇÃO</h4>
-            <p className="mb-0 small" style={{ color: '#A5C4D4' }}>
-              Dados consolidados de Chaparia • Sincronização de Contratos Ativa (FastAPI)
-            </p>
-          </div>
-
-          <div className="d-flex align-items-center gap-2">
-            <Button
-              variant="success"
-              className="d-flex align-items-center gap-2 fw-semibold px-3 py-2 shadow-sm border-0"
-              style={{ backgroundColor: '#2EC4B6' }}
-              onClick={() => navigate('/estoque/entrada')}
-            >
-              <FaPlusCircle size={16} />
-              <span>Adicionar (Entrada)</span>
-            </Button>
-
-            <Button
-              variant="primary"
-              className="d-flex align-items-center gap-2 fw-semibold px-3 py-2 shadow-sm border-0"
-              style={{ backgroundColor: '#FF9F1C' }}
-              onClick={() => navigate('/vendas/nova')}
-            >
-              <FaShoppingCart size={16} />
-              <span>Saída / Venda</span>
-            </Button>
-
-            <Button
-              variant="dark"
-              className="d-flex align-items-center gap-2 fw-semibold px-3 py-2 shadow-sm border-0"
-              style={{ backgroundColor: '#134074' }}
-              onClick={() => navigate('/vendas/historico')}
-            >
-              <FaClipboardList size={16} />
-              <span>Histórico / Auditoria</span>
-            </Button>
-          </div>
-        </Container>
-      </div>
-
+      
       <Container fluid className="px-4">
+        
+        {/* BLOCO DE FILTRO DE PERÍODO PREMIUM */}
+        <Row className="mb-4">
+          <Col xs={12}>
+            <Card className="border-0 shadow-sm bg-white" style={{ borderRadius: '8px' }}>
+              <Card.Body className="p-3">
+                <div className="d-flex flex-column flex-lg-row align-items-lg-center justify-content-between gap-3">
+                  
+                  {/* Esquerda: Ícone e Títulos */}
+                  <div className="d-flex align-items-center gap-3">
+                    <div className="bg-light rounded d-flex align-items-center justify-content-center" style={{ width: '40px', height: '40px', color: '#6C757D' }}>
+                      <FaFilter size={16} />
+                    </div>
+                    <div>
+                      <h6 className="fw-bold text-dark mb-0 text-uppercase" style={{ fontSize: '13px', letterSpacing: '0.5px' }}>
+                        Filtro de Período
+                      </h6>
+                      <span className="text-muted" style={{ fontSize: '12px' }}>Recalcular indicadores e gráficos</span>
+                    </div>
+                  </div>
+                  
+                  {/* Direita: Inputs e Botões */}
+                  <div className="d-flex flex-column flex-md-row align-items-md-end gap-3">
+                    <Form.Group style={{ width: '160px' }}>
+                      <Form.Label className="fw-semibold text-muted mb-1" style={{ fontSize: '12px' }}>Data Inicial</Form.Label>
+                      <Form.Control 
+                        type="date" 
+                        size="sm" 
+                        value={dataInicio} 
+                        onChange={(e) => setDataInicio(e.target.value)} 
+                        className="shadow-none border-secondary-subtle px-2"
+                      />
+                    </Form.Group>
+                    
+                    <Form.Group style={{ width: '160px' }}>
+                      <Form.Label className="fw-semibold text-muted mb-1" style={{ fontSize: '12px' }}>Data Final</Form.Label>
+                      <Form.Control 
+                        type="date" 
+                        size="sm" 
+                        value={dataFim} 
+                        onChange={(e) => setDataFim(e.target.value)} 
+                        className="shadow-none border-secondary-subtle px-2"
+                      />
+                    </Form.Group>
+                    
+                    <div className="d-flex gap-2 mt-2 mt-md-0">
+                      <Button 
+                        variant="primary" 
+                        size="sm" 
+                        className="d-flex align-items-center justify-content-center gap-2 fw-semibold px-4 border-0" 
+                        style={{ backgroundColor: '#134074', height: '31px' }}
+                        onClick={() => buscarDadosDoBack()}
+                        disabled={loading}
+                      >
+                        <FaSearch size={12} /> Filtrar
+                      </Button>
+                      <Button 
+                        variant="light" 
+                        size="sm" 
+                        className="d-flex align-items-center justify-content-center gap-2 fw-semibold px-3 border text-secondary"
+                        style={{ height: '31px', backgroundColor: '#F8F9FA' }}
+                        onClick={handleResetFiltro}
+                        disabled={loading || (!dataInicio && !dataFim)}
+                      >
+                        <FaUndo size={12} /> Limpar
+                      </Button>
+                    </div>
+                  </div>
+
+                </div>
+              </Card.Body>
+            </Card>
+          </Col>
+        </Row>
+
         <Row className="g-3 mb-4">
-          <Col xs={12} md={4}>
+          <Col xs={12} sm={6} xl={3}>
             <Card className="border-0 shadow-sm h-100">
               <Card.Body className="d-flex align-items-center justify-content-between">
                 <div>
                   <div className="d-flex align-items-center gap-2 mb-1">
                     <h6 className="text-muted mb-0 text-uppercase small fw-bold">Estoque no Galpão</h6>
-                    <OverlayTrigger
-                      placement="top"
-                      overlay={
-                        <BsTooltip>
-                          O "Valor Total" reflete o custo real de aquisição (preço de custo médio ponderado, já incluindo o rateio de frete), não o preço de venda projetado.
-                        </BsTooltip>
-                      }
-                    >
-                      <span className="text-muted" style={{ cursor: 'help' }}><FaInfoCircle size={12} /></span>
-                    </OverlayTrigger>
                   </div>
                   <h3 className="mb-0 fw-bold text-dark">{(kpis.metragem_total_m2 || 0).toLocaleString('pt-BR')} m²</h3>
                   <p className="mb-0 text-muted small mt-1" style={{ fontSize: '12px' }}>
-                    Valor Total (Custo): <span className="fw-semibold text-dark">
-                      {faturamentoVisivel ? formatarMoeda(valorInvestido) : '••••••••'}
+                    Custo do Estoque Atual: <span className="fw-semibold text-dark">
+                      {faturamentoVisivel ? formatarMoeda(custoEstoqueAtual) : '••••••••'}
                     </span>
                   </p>
                 </div>
@@ -342,7 +395,38 @@ export default function Dashboard() {
             </Card>
           </Col>
 
-          <Col xs={12} md={4}>
+          <Col xs={12} sm={6} xl={3}>
+            <Card className="border-0 shadow-sm h-100">
+              <Card.Body className="d-flex align-items-start justify-content-between">
+                <div>
+                  <div className="d-flex align-items-center gap-2 mb-1">
+                    <h6 className="text-muted mb-0 text-uppercase small fw-bold">Capital Investido</h6>
+                    <OverlayTrigger
+                      placement="top"
+                      overlay={
+                        <BsTooltip>
+                          Soma de todo o capital investido historicamente em compras. Não diminui com as vendas.
+                        </BsTooltip>
+                      }
+                    >
+                      <span className="text-muted" style={{ cursor: 'help' }}><FaInfoCircle size={12} /></span>
+                    </OverlayTrigger>
+                  </div>
+                  <h3 className="mb-0 fw-bold text-dark">
+                    {faturamentoVisivel ? formatarMoeda(capitalTotalInvestido) : '••••••••'}
+                  </h3>
+                  <p className="mb-0 text-muted small mt-1" style={{ fontSize: '12px' }}>
+                    Valor retido no saldo atual: <span className="fw-semibold text-primary">
+                      {faturamentoVisivel ? formatarMoeda(custoEstoqueAtual) : '••••••••'}
+                    </span>
+                  </p>
+                </div>
+                <FaWallet size={28} style={{ color: '#2EC4B6' }} />
+              </Card.Body>
+            </Card>
+          </Col>
+
+          <Col xs={12} sm={6} xl={3}>
             <Card className="border-0 shadow-sm h-100">
               <Card.Body className="d-flex align-items-start justify-content-between">
                 <div>
@@ -362,17 +446,14 @@ export default function Dashboard() {
                       {faturamentoVisivel ? formatarMoeda(faturamentoLiquido) : '••••••••'}
                     </h3>
 
-                    <span className="badge bg-success-subtle text-success border border-success-subtle rounded-pill small" style={{ fontSize: '10px' }}>
-                      {valorInvestido > 0
-                        ? `${(((faturamentoLiquido - valorInvestido) / valorInvestido) * 100).toFixed(1)}%`
-                        : '0.0%'}
+                    {/* OS: Badge com a renderização da regra de negócio tratada */}
+                    <span className={`badge border rounded-pill small ${getRoiBadgeClass()}`} style={{ fontSize: '10px' }}>
+                      {margemROI > 0 ? '+' : ''}{margemROI.toFixed(1)}%
                     </span>
                   </div>
 
                   <p className="mb-0 text-muted small mt-1" style={{ fontSize: '12px' }}>
-                    Capital Investido: <span className="fw-semibold text-danger">
-                      {faturamentoVisivel ? formatarMoeda(valorInvestido) : '••••••••'}
-                    </span>
+                    Margem sobre invest. total
                   </p>
                 </div>
                 <FaChartBar size={28} style={{ color: '#134074' }} />
@@ -380,7 +461,7 @@ export default function Dashboard() {
             </Card>
           </Col>
 
-          <Col xs={12} md={4}>
+          <Col xs={12} sm={6} xl={3}>
             <Card
               className="border-0 shadow-sm h-100 position-relative cursor-pointer transition-all"
               style={{ cursor: 'pointer', borderLeft: '4px solid #DC3545' }}
@@ -407,7 +488,7 @@ export default function Dashboard() {
             <Card className="border-0 shadow-sm p-3">
               <div className="d-flex justify-content-between align-items-center mb-3">
                 <h6 className="fw-bold text-dark mb-0 text-uppercase small" style={{ letterSpacing: '0.5px' }}>
-                  Evolução do Fluxo Comercial (Vendas vs. Compras 2026)
+                  Evolução do Fluxo Comercial (Vendas vs. Compras)
                 </h6>
               </div>
               <div style={{ width: '100%', height: 260 }}>

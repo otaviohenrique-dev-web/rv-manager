@@ -12,14 +12,14 @@ export default function NovaVenda() {
   const [erro, setErro] = useState(null);
 
   const [clienteNome, setClienteNome] = useState('');
+  const [valorFretePedido, setValorFretePedido] = useState('0.00'); // Frete único global do pedido
   const [carrinho, setCarrinho] = useState([]);
 
   const [itemAtual, setItemAtual] = useState({
     chapa_id: '',
     dimensoes: '',
     quantidade_pecas: '',
-    preco_venda_m2: '',
-    valor_frete_item: '0.00'
+    preco_venda_m2: ''
   });
 
   useEffect(() => {
@@ -37,7 +37,6 @@ export default function NovaVenda() {
     carregarProdutos();
   }, []);
 
-  // Auxiliar para calcular metragem quadrada total em estoque do produto
   const calcularM2Disponivel = (produto) => {
     if (produto.estoque_m2 !== undefined && produto.estoque_m2 !== null) {
       return Number(produto.estoque_m2);
@@ -55,7 +54,6 @@ export default function NovaVenda() {
     return 0;
   };
 
-  // Cálculo de estoque restante considerando itens já presentes no carrinho
   const produtoSelecionado = produtos.find(p => String(p.id ?? p.chapa_id) === String(itemAtual.chapa_id));
   const qtdJaNoCarrinho = carrinho
     .filter(item => String(item.chapa_id) === String(itemAtual.chapa_id))
@@ -73,11 +71,15 @@ export default function NovaVenda() {
       chapa_id: selectedId,
       quantidade_pecas: '',
       dimensoes: produtoEncontrado ? produtoEncontrado.dimensoes : '',
-      preco_venda_m2: produtoEncontrado ? (produtoEncontrado.preco_venda_m2 ?? produtoEncontrado.preco_m2) : '',
-      valor_frete_item: produtoEncontrado?.valor_frete !== undefined && produtoEncontrado?.valor_frete !== null 
-        ? Number(produtoEncontrado.valor_frete).toFixed(2) 
-        : '0.00'
+      preco_venda_m2: produtoEncontrado ? (produtoEncontrado.preco_venda_m2 ?? produtoEncontrado.preco_m2) : ''
     });
+
+    // ATUALIZAÇÃO: Puxa automaticamente o frete padrão cadastrado no produto para o pedido
+    if (produtoEncontrado && produtoEncontrado.valor_frete !== undefined && produtoEncontrado.valor_frete !== null) {
+      setValorFretePedido(produtoEncontrado.valor_frete.toString().replace('.', ','));
+    } else {
+      setValorFretePedido('0,00');
+    }
   };
 
   const handleAdicionarAoCarrinho = (e) => {
@@ -101,21 +103,16 @@ export default function NovaVenda() {
 
     const qtdPecas = parseInt(itemAtual.quantidade_pecas, 10);
     const precoM2 = parseFloat(itemAtual.preco_venda_m2?.toString().replace(',', '.')) || 0;
-    const freteItem = parseFloat(itemAtual.valor_frete_item?.toString().replace(',', '.')) || 0;
 
     if (isNaN(qtdPecas) || qtdPecas <= 0) {
       setErro('Informe uma quantidade de peças válida.');
       return;
     }
 
-    // OS 05: Validação Absoluta de Saldo (Carrinho + Nova Qtd <= Saldo em Estoque)
     if (qtdJaNoCarrinho + qtdPecas > estoqueTotalChapas) {
       const m2UnitarioCalculado = altura * largura;
       const m2RestanteDisponivel = (saldoDisponivelChapas * m2UnitarioCalculado).toFixed(2);
-
-      setErro(
-        `Quantidade indisponível. Você possui apenas ${saldoDisponivelChapas} unidade(s) / ${m2RestanteDisponivel} m² disponíveis em estoque.`
-      );
+      setErro(`Quantidade indisponível. Você possui apenas ${saldoDisponivelChapas} unidade(s) / ${m2RestanteDisponivel} m² disponíveis.`);
       return;
     }
 
@@ -126,9 +123,7 @@ export default function NovaVenda() {
 
     const m2Unitario = altura * largura;
     const m2Total = m2Unitario * qtdPecas;
-    
     const valorVidro = m2Total * precoM2;
-    const valorTotalItem = valorVidro + freteItem;
 
     const novoItem = {
       chapa_id: Number(itemAtual.chapa_id),
@@ -138,9 +133,8 @@ export default function NovaVenda() {
       largura: largura,
       quantidade_pecas: qtdPecas,
       preco_venda_m2: precoM2,
-      valor_frete: Number(freteItem) || 0,
       m2_total: m2Total,
-      valor_total: Number(valorTotalItem) || 0
+      valor_total: Number(valorVidro) || 0
     };
 
     setCarrinho([...carrinho, novoItem]);
@@ -149,8 +143,7 @@ export default function NovaVenda() {
       chapa_id: '',
       dimensoes: '',
       quantidade_pecas: '',
-      preco_venda_m2: '',
-      valor_frete_item: '0.00'
+      preco_venda_m2: ''
     });
   };
 
@@ -168,43 +161,48 @@ export default function NovaVenda() {
     setSubmitting(true);
     setErro(null);
 
+    const freteTotal = parseFloat(valorFretePedido.toString().replace(',', '.')) || 0;
+    // Distribui o frete proporcionalmente ou atribui ao primeiro item para compatibilidade com o backend
+    const fretePorItem = carrinho.length > 0 ? freteTotal / carrinho.length : 0;
+
     const payload = {
       cliente_nome: clienteNome,
-      itens: carrinho.map(item => ({
+      itens: carrinho.map((item, idx) => ({
         chapa_id: item.chapa_id,
         altura: item.altura,
         largura: item.largura,
         quantidade_pecas: item.quantidade_pecas,
         preco_venda_m2: item.preco_venda_m2,
-        valor_frete_item: Number(item.valor_frete) || 0
+        valor_frete_item: idx === 0 ? freteTotal : 0 // Atribui o frete global no primeiro item da fatura
       }))
     };
 
     try {
       const response = await api.post('/api/v1/vendas/nova', payload);
       
-      // Novo comportamento: Redirecionando para o espelho de vendas e enviando o payload
+      // CORREÇÃO CRUCIAL: Passando response.data.venda para extrair os dados perfeitamente no espelho
       navigate('/vendas/espelho', { 
         state: { 
-          venda: response.data,
+          venda: response.data.venda,
           toastMessage: 'Venda registrada com sucesso e espelho gerado!' 
         } 
       });
       
     } catch (err) {
       if (err.response?.data?.detail) {
-        setErro(typeof err.response.data.detail === 'string' ? err.response.data.detail : 'Ocorreu um erro de validação nos dados do pedido.');
+        setErro(typeof err.response.data.detail === 'string' ? err.response.data.detail : 'Ocorreu um erro de validação.');
       } else {
-        setErro('Ocorreu um erro ao registrar a saída. Verifique a conexão com a API.');
+        setErro('Ocorreu um erro ao registrar a saída. Verifique a conexão.');
       }
     } finally {
       setSubmitting(false);
     }
-  }; // <-- CHAVE DE FECHAMENTO ADICIONADA AQUI
+  };
 
   const totalM2Geral = carrinho.reduce((acc, item) => acc + (Number(item.m2_total) || 0), 0);
-  const totalFreteGeral = carrinho.reduce((acc, item) => acc + (Number(item.valor_frete) || 0), 0);
-  const totalValorGeral = carrinho.reduce((acc, item) => acc + (Number(item.valor_total) || 0), 0);
+  const totalProdutosGeral = carrinho.reduce((acc, item) => acc + (Number(item.valor_total) || 0), 0);
+  const freteGeralNum = parseFloat(valorFretePedido.toString().replace(',', '.')) || 0;
+  const totalGeralPedido = totalProdutosGeral + freteGeralNum;
 
   if (loading) {
     return (
@@ -226,16 +224,28 @@ export default function NovaVenda() {
             <FaShoppingCart className="text-warning fs-4" />
             <h5 className="fw-bold mb-0 text-dark">Registrar Saída / Nova Venda</h5>
           </div>
-          <p className="text-muted small mb-0 mt-1">Monte o carrinho com transparência total de preços e frete.</p>
+          <p className="text-muted small mb-0 mt-1">Monte o carrinho com controle unificado de frete e transparência de preços.</p>
         </Card.Header>
 
         <Card.Body className="p-4">
           {erro && <Alert variant="danger" className="py-2 small">{erro}</Alert>}
 
-          <Form.Group className="mb-4">
-            <Form.Label className="fw-semibold small">Cliente / Comprador</Form.Label>
-            <Form.Control type="text" placeholder="Ex: Vidraçaria Central Ltda" value={clienteNome} onChange={(e) => setClienteNome(e.target.value)} required />
-          </Form.Group>
+          <Row className="g-3 mb-4">
+            <Col xs={12} md={8}>
+              <Form.Group>
+                <Form.Label className="fw-semibold small">Cliente / Comprador</Form.Label>
+                <Form.Control type="text" placeholder="Ex: Vidraçaria Central Ltda" value={clienteNome} onChange={(e) => setClienteNome(e.target.value)} required />
+              </Form.Group>
+            </Col>
+            <Col xs={12} md={4}>
+              <Form.Group>
+                <Form.Label className="fw-semibold small d-flex align-items-center gap-1 text-primary">
+                  <FaTruck size={12} /> Valor do Frete (Pedido R$)
+                </Form.Label>
+                <Form.Control type="number" step="0.01" placeholder="Ex: 50.00" value={valorFretePedido} onChange={(e) => setValorFretePedido(e.target.value)} />
+              </Form.Group>
+            </Col>
+          </Row>
 
           <hr className="my-4 text-muted opacity-25" />
 
@@ -269,7 +279,7 @@ export default function NovaVenda() {
             </Row>
 
             <Row className="g-3 mb-3">
-              <Col xs={12} md={4}>
+              <Col xs={12} md={6}>
                 <Form.Group>
                   <Form.Label className="fw-semibold small">Quantidade de Peças</Form.Label>
                   <Form.Control 
@@ -289,20 +299,10 @@ export default function NovaVenda() {
                 </Form.Group>
               </Col>
 
-              <Col xs={12} md={4}>
+              <Col xs={12} md={6}>
                 <Form.Group>
                   <Form.Label className="fw-semibold small">Preço de Venda / m² (R$)</Form.Label>
                   <Form.Control type="number" step="0.01" placeholder="Ex: 280.00" value={itemAtual.preco_venda_m2} onChange={(e) => setItemAtual({ ...itemAtual, preco_venda_m2: e.target.value })} required />
-                </Form.Group>
-              </Col>
-
-              <Col xs={12} md={4}>
-                <Form.Group>
-                  <Form.Label className="fw-semibold small d-flex align-items-center gap-1 text-primary">
-                    <FaTruck size={12} /> Valor do Frete (R$)
-                  </Form.Label>
-                  <Form.Control type="number" step="0.01" placeholder="Ex: 50.00" value={itemAtual.valor_frete_item} onChange={(e) => setItemAtual({ ...itemAtual, valor_frete_item: e.target.value })} />
-                  <Form.Text className="text-muted" style={{ fontSize: '10px' }}>Puxado do cadastro ou editável.</Form.Text>
                 </Form.Group>
               </Col>
             </Row>
@@ -324,7 +324,6 @@ export default function NovaVenda() {
                   <th className="text-center">Qtd</th>
                   <th className="text-center">m² Total</th>
                   <th className="text-end">R$ / m²</th>
-                  <th className="text-end">Frete (R$)</th>
                   <th className="text-end">Subtotal</th>
                   <th className="text-center" style={{ width: '50px' }}>Ações</th>
                 </tr>
@@ -338,7 +337,6 @@ export default function NovaVenda() {
                       <td className="text-center fw-bold">{item.quantidade_pecas}</td>
                       <td className="text-center">{item.m2_total.toFixed(3)} m²</td>
                       <td className="text-end">R$ {Number(item.preco_venda_m2 || 0).toFixed(2)}</td>
-                      <td className="text-end text-muted">R$ {Number(item.valor_frete || 0).toFixed(2)}</td>
                       <td className="text-end fw-bold text-success">R$ {Number(item.valor_total || 0).toFixed(2)}</td>
                       <td className="text-center">
                         <Button variant="link" className="text-danger p-0 border-0" onClick={() => handleRemoverItem(idx)} title="Remover item">
@@ -349,7 +347,7 @@ export default function NovaVenda() {
                   ))
                 ) : (
                   <tr>
-                    <td colSpan="8" className="text-center py-4 text-muted">
+                    <td colSpan="7" className="text-center py-4 text-muted">
                       Nenhum item adicionado ao carrinho. Preencha os campos acima e clique em "Adicionar ao Carrinho".
                     </td>
                   </tr>
@@ -358,14 +356,11 @@ export default function NovaVenda() {
               {carrinho.length > 0 && (
                 <tfoot className="table-light fw-bold">
                   <tr>
-                    <td colSpan="3" className="text-end">TOTAIS:</td>
+                    <td colSpan="3" className="text-end">TOTAIS DO PEDIDO:</td>
                     <td className="text-center text-primary">{totalM2Geral.toFixed(3)} m²</td>
                     <td></td>
-                    <td className="text-end text-muted">
-                      R$ {totalFreteGeral.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                    </td>
                     <td className="text-end text-success fs-6">
-                      R$ {totalValorGeral.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      R$ {totalGeralPedido.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </td>
                     <td></td>
                   </tr>

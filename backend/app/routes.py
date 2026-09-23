@@ -1,8 +1,9 @@
 from datetime import datetime
 from collections import defaultdict
 from fastapi import APIRouter, HTTPException, Depends
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
+from typing import Optional # <--- Adicionado para parâmetros de query opcionais
 
 from app.schemas import (
     CalculoPecaRequest,
@@ -68,51 +69,110 @@ def get_tabela_precos(db: Session = Depends(get_db)):
         })
     return tabela
 
+
 @router.get("/api/v1/dashboard/cards-graficos", tags=["Dashboard"])
-def get_cards_graficos(db: Session = Depends(get_db)):
+def get_cards_graficos(
+    data_inicio: Optional[str] = None,
+    data_fim: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    """
+    Entrega as métricas do Dashboard.
+    Faturamento e Quebras respeitam o filtro de datas.
+    Estoque Atual e Capital Investido mantêm a integridade histórica (All-Time).
+    """
     chapas = db.query(models.Chapa).all()
+    
+    # 1. BASE HISTÓRICA INTACTA (Para não distorcer o Capital Investido)
+    itens_venda_all = db.query(models.ItemVenda).all()
+    quebras_all = db.query(models.Quebra).all() if hasattr(models, 'Quebra') else []
+
+    m2_vendido_por_chapa = defaultdict(float)
+    for item in itens_venda_all:
+        m2_item = getattr(item, 'metragem_total_m2', None) or ((item.altura * item.largura) * item.quantidade_pecas)
+        m2_vendido_por_chapa[item.chapa_id] += m2_item
+
+    m2_quebrado_por_chapa = defaultdict(float)
+    for q in quebras_all:
+        m2_quebrado_por_chapa[q.chapa_id] += (q.m2_original or 0.0)
 
     metragem_total_estoque = 0.0
-    valor_investido_estoque = 0.0
+    custo_estoque_atual = 0.0
+    capital_total_investido = 0.0
     familias = {}
 
     for c in chapas:
-        m2_chapa = (c.altura * c.largura) * c.estoque_chapas
-        metragem_total_estoque += m2_chapa
-        valor_investido_estoque += (m2_chapa * (c.preco_custo_m2 or 0.0))
+        m2_chapa_estoque = (c.altura * c.largura) * c.estoque_chapas
+        m2_chapa_vendida = m2_vendido_por_chapa.get(c.id, 0.0)
+        m2_chapa_quebrada = m2_quebrado_por_chapa.get(c.id, 0.0)
+        
+        m2_historico_total = m2_chapa_estoque + m2_chapa_vendida + m2_chapa_quebrada
+        custo_m2 = (c.preco_custo_m2 or 0.0)
+
+        metragem_total_estoque += m2_chapa_estoque
+        custo_estoque_atual += (m2_chapa_estoque * custo_m2)
+        capital_total_investido += (m2_historico_total * custo_m2)
 
         nome_cat = c.categoria if c.categoria else "OUTROS"
-        familias[nome_cat] = familias.get(nome_cat, 0.0) + m2_chapa
+        familias[nome_cat] = familias.get(nome_cat, 0.0) + m2_chapa_estoque
 
     grafico_estoque_familia = [
         {"familia": f, "m2": round(v, 2)} for f, v in familias.items() if v > 0
     ]
 
-    itens_venda = db.query(models.ItemVenda).all()
-    faturamento_total_com_frete = sum(i.valor_total + (i.valor_frete_item or 0.0) for i in itens_venda)
+    # 2. FILTRAGEM DINÂMICA (Para Faturamento e Quebras)
+    query_vendas = db.query(models.Venda).options(joinedload(models.Venda.itens))
+    query_quebras = db.query(models.Quebra) if hasattr(models, 'Quebra') else None
+
+    if data_inicio:
+        try:
+            inicio = datetime.strptime(data_inicio, "%Y-%m-%d")
+            query_vendas = query_vendas.filter(models.Venda.data_criacao >= inicio)
+            if query_quebras and hasattr(models.Quebra, 'data_criacao'):
+                query_quebras = query_quebras.filter(models.Quebra.data_criacao >= inicio)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Formato data_inicio inválido. Use YYYY-MM-DD.")
+            
+    if data_fim:
+        try:
+            fim = datetime.strptime(data_fim, "%Y-%m-%d").replace(hour=23, minute=59, second=59)
+            query_vendas = query_vendas.filter(models.Venda.data_criacao <= fim)
+            if query_quebras and hasattr(models.Quebra, 'data_criacao'):
+                query_quebras = query_quebras.filter(models.Quebra.data_criacao <= fim)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Formato data_fim inválido. Use YYYY-MM-DD.")
+
+    vendas_filtradas = query_vendas.all()
+    
+    faturamento_filtrado = 0.0
+    for v in vendas_filtradas:
+        faturamento_filtrado += sum((i.valor_total or 0.0) + (i.valor_frete_item or 0.0) for i in v.itens)
+        
+    quebras_filtradas_qtd = query_quebras.count() if query_quebras else 0
 
     mes_atual_str = datetime.now().strftime("%b")
+    
     grafico_vendas = [
-        { "mes": "Jan", "vendas": 0, "compras": 0 },
-        { "mes": "Fev", "vendas": 0, "compras": 0 },
-        { "mes": "Mar", "vendas": 0, "compras": 0 },
-        { "mes": "Abr", "vendas": 0, "compras": 0 },
-        { "mes": "Mai", "vendas": 0, "compras": 0 },
-        { "mes": mes_atual_str, "vendas": round(faturamento_total_com_frete, 2), "compras": round(valor_investido_estoque, 2) }
+        { "mes": "Jan", "vendas": 0, "custo_estoque": 0 },
+        { "mes": "Fev", "vendas": 0, "custo_estoque": 0 },
+        { "mes": "Mar", "vendas": 0, "custo_estoque": 0 },
+        { "mes": "Abr", "vendas": 0, "custo_estoque": 0 },
+        { "mes": "Mai", "vendas": 0, "custo_estoque": 0 },
+        { "mes": mes_atual_str, "vendas": round(faturamento_filtrado, 2), "custo_estoque": round(custo_estoque_atual, 2) }
     ]
-
-    total_quebras_qtd = db.query(models.Quebra).count() if hasattr(models, 'Quebra') else 0
 
     return {
         "kpis": {
-            "faturamento_total": round(faturamento_total_com_frete, 2),
-            "valor_investido": round(valor_investido_estoque, 2),
+            "faturamento_total": round(faturamento_filtrado, 2),
+            "custo_estoque_atual": round(custo_estoque_atual, 2),
+            "capital_total_investido": round(capital_total_investido, 2), 
             "metragem_total_m2": round(metragem_total_estoque, 2),
-            "total_quebras": total_quebras_qtd
+            "total_quebras": quebras_filtradas_qtd
         },
         "grafico_vendas_mensal": grafico_vendas,
         "grafico_estoque_familia": grafico_estoque_familia
     }
+
 
 @router.get("/api/v1/vendedor/estoque", tags=["Vendedor"])
 def get_estoque_vendedor(db: Session = Depends(get_db)):

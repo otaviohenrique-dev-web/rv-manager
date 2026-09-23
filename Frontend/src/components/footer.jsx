@@ -6,9 +6,9 @@ export default function Footer() {
   return (
     <footer 
       style={{ 
-        backgroundColor: '#0B2545', 
+        backgroundColor: '#071A30', 
         color: '#A5C4D4', 
-        borderTop: '1px solid rgba(255, 255, 255, 0.1)' 
+        borderTop: '1px solid rgba(255, 255, 255, 0.08)' 
       }} 
       className="mt-auto py-3"
     >
@@ -32,10 +32,10 @@ export default function Footer() {
                 href="https://github.com/otaviohenrique-dev-web" 
                 target="_blank" 
                 rel="noopener noreferrer"
-                className="text-decoration-none d-flex align-items-center gap-1 text-light-hover"
-                style={{ color: '#A5C4D4', transition: 'color 0.2s', fontSize: '14px' }}
+                className="text-decoration-none d-flex align-items-center gap-1"
+                style={{ color: '#A5C4D4', transition: 'color 0.2s', fontSize: '13px' }}
               >
-                <FaGithub size={18} />
+                <FaGithub size={16} />
                 <span>GitHub</span>
               </a>
 
@@ -43,10 +43,10 @@ export default function Footer() {
                 href="https://www.instagram.com/otavioh.dev" 
                 target="_blank" 
                 rel="noopener noreferrer"
-                className="text-decoration-none d-flex align-items-center gap-1 text-light-hover"
-                style={{ color: '#A5C4D4', transition: 'color 0.2s', fontSize: '14px' }}
+                className="text-decoration-none d-flex align-items-center gap-1"
+                style={{ color: '#A5C4D4', transition: 'color 0.2s', fontSize: '13px' }}
               >
-                <FaInstagram size={18} className="text-danger-subtle" />
+                <FaInstagram size={16} className="text-danger-subtle" />
                 <span>Instagram</span>
               </a>
             </div>
